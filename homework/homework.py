@@ -95,3 +95,158 @@
 # {'type': 'cm_matrix', 'dataset': 'train', 'true_0': {"predicted_0": 15562, "predicte_1": 666}, 'true_1': {"predicted_0": 3333, "predicted_1": 1444}}
 # {'type': 'cm_matrix', 'dataset': 'test', 'true_0': {"predicted_0": 15562, "predicte_1": 650}, 'true_1': {"predicted_0": 2490, "predicted_1": 1420}}
 #
+import pandas as pd
+from sklearn.compose import ColumnTransformer
+from sklearn.decomposition import PCA
+from sklearn.preprocessing import OneHotEncoder, StandardScaler
+from sklearn.feature_selection import SelectKBest, f_classif
+from sklearn.pipeline import Pipeline
+from sklearn.svm import SVC
+import pandas as pd
+from sklearn.model_selection import GridSearchCV
+from sklearn.metrics import make_scorer, balanced_accuracy_score, precision_score, recall_score, f1_score, confusion_matrix
+import pickle
+import os
+import gzip
+import json
+test_data =pd.read_csv("files/input/test_data.csv.zip") #Leemos el dataframe de test_data.csv.zip
+train_data =pd.read_csv("files/input/train_data.csv.zip") #Leemos el dataframe de test_data.csv.zip
+
+# Paso 1.
+test_data.rename(columns={"default payment next month": "default"}, inplace=True) # Renombramos la columna para test_data
+test_data.drop(columns=["ID"], inplace=True) # Eliminar la columna 'ID'
+test_data.dropna(inplace=True)  # Eliminar filas con cualquier valor nulo
+test_data["EDUCATION"] = test_data["EDUCATION"].apply(lambda x: 4 if x > 4 else x)
+test_data = test_data.loc[test_data["MARRIAGE"] != 0]
+test_data = test_data.loc[test_data["EDUCATION"] != 0]
+
+train_data.rename(columns={"default payment next month": "default"}, inplace=True) # Renombramos la columna train_data
+train_data.drop(columns=["ID"], inplace=True) # Eliminar la columna 'ID'
+train_data.dropna(inplace=True)  # Eliminar filas con cualquier valor nulo
+train_data["EDUCATION"] = train_data["EDUCATION"].apply(lambda x: 4 if x > 4 else x)
+train_data = train_data.loc[train_data["MARRIAGE"] != 0]
+train_data = train_data.loc[train_data["EDUCATION"] != 0]
+
+
+# Paso 2.
+
+X_train = train_data.drop(columns=["default"])  
+y_train = train_data["default"] 
+
+X_test = test_data.drop(columns=["default"])  
+y_test = test_data["default"]  
+# Paso 3. 
+categorical_features=["SEX","EDUCATION","MARRIAGE"]
+numerical_features=num_columns = [col for col in X_train.columns if col not in categorical_features]
+
+preprocessor = ColumnTransformer(
+    transformers=[
+        ('num', StandardScaler(with_mean=True, with_std=True), numerical_features),
+        ('cat', OneHotEncoder(), categorical_features)
+    ],
+
+)
+
+# Crear el pipeline con el modelo SVC (Máquina de Vectores de Soporte)
+pipeline = Pipeline(
+    [
+    ('preprocessor', preprocessor),
+    ('pca', PCA()),
+    ('feature_selection',SelectKBest(score_func=f_classif)),
+    ('classifier', SVC(kernel="rbf", random_state=12345, max_iter=-1))
+])
+
+
+
+# Definir los hiperparámetros a optimizar para SVC
+param_grid = {
+    "pca__n_components": [20,X_train.shape[1]-2],
+    'feature_selection__k': [12],
+    'classifier__kernel':['rbf'],
+    'classifier__gamma': [0.1],
+}
+
+
+model=GridSearchCV(
+    pipeline,
+    param_grid,
+    cv=10,
+    scoring="balanced_accuracy",
+    n_jobs=-1,
+    refit=True
+    )
+
+model.fit(X_train, y_train)
+# Paso 5
+
+models_dir = 'files/models'
+os.makedirs(models_dir, exist_ok=True)
+
+with gzip.open("files/models/model.pkl.gz", "wb") as file:
+    pickle.dump(model, file)
+
+# Paso 6
+
+y_train_pred = model.predict(X_train)
+y_test_pred = model.predict(X_test)
+
+metrics = [
+    {
+        "type": "metrics",
+        "dataset": "train",
+        "precision": float(precision_score(y_train, y_train_pred)),
+        "balanced_accuracy": float(balanced_accuracy_score(y_train, y_train_pred)),
+        "recall": float(recall_score(y_train, y_train_pred)),
+        "f1_score": float(f1_score(y_train, y_train_pred)),
+    },
+    {
+        "type": "metrics",
+        "dataset": "test",
+        "precision": float(precision_score(y_test, y_test_pred)),
+        "balanced_accuracy": float(balanced_accuracy_score(y_test, y_test_pred)),
+        "recall": float(recall_score(y_test, y_test_pred)),
+        "f1_score": float(f1_score(y_test, y_test_pred)),
+    },
+]
+
+output_file = "files/output/metrics.json"
+os.makedirs("files/output", exist_ok=True)
+
+with open(output_file, "w") as f:
+    for item in metrics:
+        f.write(str(item).replace("'", '"') + "\n")
+
+# Paso 7 
+train_cm = confusion_matrix(y_train, y_train_pred)
+test_cm = confusion_matrix(y_test, y_test_pred)
+
+confusion_matrices = [
+    {
+        "type": "cm_matrix",
+        "dataset": "train",
+        "true_0": {
+            "predicted_0": int(train_cm[0, 0]),
+            "predicted_1": int(train_cm[0, 1]),
+        },
+        "true_1": {
+            "predicted_0": int(train_cm[1, 0]),
+            "predicted_1": int(train_cm[1, 1]),
+        },
+    },
+    {
+        "type": "cm_matrix",
+        "dataset": "test",
+        "true_0": {
+            "predicted_0": int(test_cm[0, 0]),
+            "predicted_1": int(test_cm[0, 1]),
+        },
+        "true_1": {
+            "predicted_0": int(test_cm[1, 0]),
+            "predicted_1": int(test_cm[1, 1]),
+        },
+    },
+]
+
+with open(output_file, "a") as f:
+    for item in confusion_matrices:
+        f.write(str(item).replace("'", '"') + "\n")
